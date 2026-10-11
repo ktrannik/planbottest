@@ -775,7 +775,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗑️ /cancel_all [@user] — все викторины\n"
         "🗑️ /cancelmeme <id> [@user] — отменить мем\n"
         "🗑️ /cancelallmemes [@user] — все мемы\n"
-        "🗑️ /cancelmeme_all [@user] — то же, алиас\n"
+        "🗑️ /cancelmeme_all [@user] — то же самое\n"
         "🔍 /view @username — викторины пользователя\n"
         "🖼️ /viewmeme @username — мемы пользователя\n"
         "🆔 /id — показать свой ID"
