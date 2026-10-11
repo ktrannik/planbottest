@@ -231,6 +231,22 @@ def get_full_scheduled(quiz_id):
     conn.close()
     return row
 
+def get_scheduled_owner(quiz_id):
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('SELECT chat_id, username FROM scheduled WHERE id = ?', (quiz_id,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else (None, None)
+
+def count_user_scheduled(chat_id):
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('SELECT COUNT(*) FROM scheduled WHERE chat_id = ?', (chat_id,))
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
 def delete_user_scheduled(chat_id, quiz_id=None):
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
@@ -340,7 +356,6 @@ def get_meme_by_id(meme_id):
     return row
 
 def get_full_meme(meme_id):
-    """Полная запись мема: id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time."""
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
     c.execute('''
@@ -350,6 +365,22 @@ def get_full_meme(meme_id):
     row = c.fetchone()
     conn.close()
     return row
+
+def get_meme_owner(meme_id):
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('SELECT chat_id, username FROM memes WHERE id = ?', (meme_id,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else (None, None)
+
+def count_user_memes(chat_id):
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('SELECT COUNT(*) FROM memes WHERE chat_id = ?', (chat_id,))
+    n = c.fetchone()[0]
+    conn.close()
+    return n
 
 def delete_user_memes(chat_id, meme_id=None):
     conn = sqlite3.connect(QUIZZES_DB)
@@ -374,10 +405,6 @@ def update_meme_time(chat_id, meme_id, new_time_utc):
     return changed > 0
 
 def update_meme_field(chat_id, meme_id, field, value):
-    """
-    Обновляет одно поле мема.
-    field: 'hashtag' | 'post_text' | 'file_id'
-    """
     allowed = {'hashtag', 'post_text', 'file_id'}
     if field not in allowed:
         return False
@@ -744,10 +771,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✏️ /editquiz @username <id> — редактировать чужую\n"
         "✏️ /editmeme <id> — редактировать свой мем\n"
         "✏️ /editmeme @username <id> — редактировать чужой\n"
-        "🗑️ /cancel_all — отменить все викторины\n"
-        "🗑️ /cancelallmemes — отменить все мемы\n"
-        "🔍 /view @username — посмотреть викторины пользователя\n"
-        "🖼️ /viewmeme @username — посмотреть мемы пользователя\n"
+        "🗑️ /cancel <id> [@user] — отменить викторину\n"
+        "🗑️ /cancel_all [@user] — все викторины\n"
+        "🗑️ /cancelmeme <id> [@user] — отменить мем\n"
+        "🗑️ /cancelallmemes [@user] — все мемы\n"
+        "🗑️ /cancelmeme_all [@user] — то же, алиас\n"
+        "🔍 /view @username — викторины пользователя\n"
+        "🖼️ /viewmeme @username — мемы пользователя\n"
         "🆔 /id — показать свой ID"
     )
 
@@ -768,26 +798,214 @@ async def my_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply += "✏️ `/editquiz <id>` — редактировать"
     await update.message.reply_text(reply)
 
+# --- ОТМЕНА ВИКТОРИН ---
 async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
-    chat_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text("❌ Укажи ID: `/cancel 123`")
+
+    my_chat_id = str(update.effective_user.id)
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "❌ Использование:\n"
+            "`/cancel <id>` — своя\n"
+            "`/cancel <id> @username` — чужая"
+        )
         return
+
     try:
-        quiz_id = int(context.args[0])
-        delete_user_scheduled(chat_id, quiz_id)
-        await update.message.reply_text(f"✅ Викторина #{quiz_id} отменена.")
-    except:
-        await update.message.reply_text("❌ Ошибка. ID должен быть числом.")
+        quiz_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом.")
+        return
+
+    if len(args) == 1:
+        target_chat_id = my_chat_id
+    elif len(args) == 2:
+        found_chat_id, found_username = find_user_chat_id(args[1])
+        if not found_chat_id:
+            await update.message.reply_text(f"❌ Пользователь `{args[1]}` не найден.")
+            return
+        target_chat_id = found_chat_id
+    else:
+        await update.message.reply_text("❌ Слишком много аргументов.")
+        return
+
+    owner_chat_id, owner_username = get_scheduled_owner(quiz_id)
+    if owner_chat_id is None:
+        await update.message.reply_text(f"❌ Викторина #{quiz_id} не найдена.")
+        return
+
+    if owner_chat_id != target_chat_id:
+        await update.message.reply_text(
+            f"❌ Викторина #{quiz_id} принадлежит @{owner_username or owner_chat_id}."
+        )
+        return
+
+    delete_user_scheduled(target_chat_id, quiz_id)
+
+    if target_chat_id == my_chat_id:
+        await update.message.reply_text(f"✅ Своя викторина #{quiz_id} отменена.")
+    else:
+        await update.message.reply_text(
+            f"✅ Викторина #{quiz_id} у @{owner_username or target_chat_id} отменена."
+        )
+        # Уведомим владельца
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, data={
+                "chat_id": owner_chat_id,
+                "text": f"⚠️ Админ отменил твою викторину #{quiz_id}."
+            })
+        except Exception as e:
+            print(f"⚠️ Не смог уведомить {owner_chat_id}: {e}")
 
 async def cancel_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
-    chat_id = str(update.effective_user.id)
-    delete_user_scheduled(chat_id)
-    await update.message.reply_text("✅ Все викторины отменены.")
+
+    my_chat_id = str(update.effective_user.id)
+    args = context.args
+
+    if not args:
+        n = count_user_scheduled(my_chat_id)
+        if n == 0:
+            await update.message.reply_text("📭 У тебя нет викторин.")
+            return
+        delete_user_scheduled(my_chat_id)
+        await update.message.reply_text(f"✅ Все твои викторины отменены ({n} шт).")
+        return
+
+    if len(args) != 1:
+        await update.message.reply_text("❌ Использование: `/cancel_all [@username|chat_id]`")
+        return
+
+    found_chat_id, found_username = find_user_chat_id(args[0])
+    if not found_chat_id:
+        await update.message.reply_text(f"❌ Пользователь `{args[0]}` не найден.")
+        return
+
+    n = count_user_scheduled(found_chat_id)
+    if n == 0:
+        await update.message.reply_text(f"📭 У @{found_username or found_chat_id} нет викторин.")
+        return
+
+    target_label = f"@{found_username}" if found_username else f"`{found_chat_id}`"
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_caq_{found_chat_id}"),
+         InlineKeyboardButton("❌ Отмена", callback_data="cancel_caq")]
+    ]
+    await update.message.reply_text(
+        f"⚠️ Удалить **ВСЕ** викторины {target_label}?\n\n"
+        f"📊 Найдено: **{n}** шт.\n\n"
+        f"Это действие необратимо.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# --- ОТМЕНА МЕМОВ ---
+async def cancel_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+
+    my_chat_id = str(update.effective_user.id)
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "❌ Использование:\n"
+            "`/cancelmeme <id>` — свой\n"
+            "`/cancelmeme <id> @username` — чужой"
+        )
+        return
+
+    try:
+        meme_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом.")
+        return
+
+    if len(args) == 1:
+        target_chat_id = my_chat_id
+    elif len(args) == 2:
+        found_chat_id, found_username = find_user_chat_id(args[1])
+        if not found_chat_id:
+            await update.message.reply_text(f"❌ Пользователь `{args[1]}` не найден.")
+            return
+        target_chat_id = found_chat_id
+    else:
+        await update.message.reply_text("❌ Слишком много аргументов.")
+        return
+
+    owner_chat_id, owner_username = get_meme_owner(meme_id)
+    if owner_chat_id is None:
+        await update.message.reply_text(f"❌ Мем #{meme_id} не найден.")
+        return
+
+    if owner_chat_id != target_chat_id:
+        await update.message.reply_text(
+            f"❌ Мем #{meme_id} принадлежит @{owner_username or owner_chat_id}."
+        )
+        return
+
+    delete_user_memes(target_chat_id, meme_id)
+
+    if target_chat_id == my_chat_id:
+        await update.message.reply_text(f"✅ Свой мем #{meme_id} отменён.")
+    else:
+        await update.message.reply_text(
+            f"✅ Мем #{meme_id} у @{owner_username or target_chat_id} отменён."
+        )
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, data={
+                "chat_id": owner_chat_id,
+                "text": f"⚠️ Админ отменил твой мем #{meme_id}."
+            })
+        except Exception as e:
+            print(f"⚠️ Не смог уведомить {owner_chat_id}: {e}")
+
+async def cancel_all_memes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+
+    my_chat_id = str(update.effective_user.id)
+    args = context.args
+
+    if not args:
+        n = count_user_memes(my_chat_id)
+        if n == 0:
+            await update.message.reply_text("📭 У тебя нет мемов.")
+            return
+        delete_user_memes(my_chat_id)
+        await update.message.reply_text(f"✅ Все твои мемы отменены ({n} шт).")
+        return
+
+    if len(args) != 1:
+        await update.message.reply_text("❌ Использование: `/cancelallmemes [@username|chat_id]`")
+        return
+
+    found_chat_id, found_username = find_user_chat_id(args[0])
+    if not found_chat_id:
+        await update.message.reply_text(f"❌ Пользователь `{args[0]}` не найден.")
+        return
+
+    n = count_user_memes(found_chat_id)
+    if n == 0:
+        await update.message.reply_text(f"📭 У @{found_username or found_chat_id} нет мемов.")
+        return
+
+    target_label = f"@{found_username}" if found_username else f"`{found_chat_id}`"
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_cam_{found_chat_id}"),
+         InlineKeyboardButton("❌ Отмена", callback_data="cancel_cam")]
+    ]
+    await update.message.reply_text(
+        f"⚠️ Удалить **ВСЕ** мемы {target_label}?\n\n"
+        f"📊 Найдено: **{n}** шт.\n\n"
+        f"Это действие необратимо.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
@@ -1024,11 +1242,6 @@ async def show_quiz_edit_menu(update_or_query, context, quiz_id, edit=False):
 
 # --- РЕДАКТИРОВАНИЕ МЕМОВ ---
 async def edit_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /editmeme <id>              — редактировать свой
-    /editmeme @username <id>    — редактировать чужой по юзернейму
-    /editmeme 123456789 <id>    — редактировать чужой по chat_id
-    """
     if not await require_admin(update):
         return
 
@@ -1094,9 +1307,6 @@ async def edit_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_meme_edit_menu(update_or_query, context, meme_id, edit=False):
-    """
-    Показывает картинку/видео мема + меню редактирования.
-    """
     meme = get_full_meme(meme_id)
     if not meme:
         text = f"❌ Мем #{meme_id} не найден."
@@ -1106,7 +1316,6 @@ async def show_meme_edit_menu(update_or_query, context, meme_id, edit=False):
             await update_or_query.message.reply_text(text)
         return
 
-    # meme = (id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time)
     file_id = meme[3]
     file_type = meme[4]
     hashtag = meme[5]
@@ -1134,7 +1343,6 @@ async def show_meme_edit_menu(update_or_query, context, meme_id, edit=False):
     if edit:
         await update_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        # Сначала шлём медиа, потом текст
         try:
             if file_type == 'photo':
                 await update_or_query.message.reply_photo(
@@ -1295,27 +1503,6 @@ async def my_memes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply += f"   🆔 {meme_id} | /cancelmeme {meme_id} | /editmeme {meme_id}\n\n"
     reply += "✏️ `/editmeme <id>` — редактировать"
     await update.message.reply_text(reply)
-
-async def cancel_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
-    chat_id = str(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text("❌ Укажи ID: `/cancelmeme 123`")
-        return
-    try:
-        meme_id = int(context.args[0])
-        delete_user_memes(chat_id, meme_id)
-        await update.message.reply_text(f"✅ Мем #{meme_id} отменён.")
-    except:
-        await update.message.reply_text("❌ Ошибка.")
-
-async def cancel_all_memes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
-    chat_id = str(update.effective_user.id)
-    delete_user_memes(chat_id)
-    await update.message.reply_text("✅ Все мемы отменены.")
 
 # --- БЭКАПЫ ---
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1664,8 +1851,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/mymemes — мои мемы\n"
         "/editquiz <id> — редактировать викторину\n"
         "/editmeme <id> — редактировать мем\n"
-        "/cancel_all — отменить все викторины\n"
-        "/cancelallmemes — отменить все мемы\n"
+        "/cancel <id> [@user] — отменить викторину\n"
+        "/cancel_all [@user] — все викторины\n"
+        "/cancelmeme <id> [@user] — отменить мем\n"
+        "/cancelallmemes [@user] — все мемы\n"
         "/id — мой ID\n"
         "/view @username — викторины пользователя\n"
         "/viewmeme @username — мемы пользователя"
@@ -1684,6 +1873,56 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⛔ У тебя нет прав.")
         except Exception:
             pass
+        return
+
+    # --- Подтверждение массового удаления ВИКТОРИН ---
+    if data.startswith("confirm_caq_"):
+        target_chat_id = data.replace("confirm_caq_", "")
+        n = count_user_scheduled(target_chat_id)
+        if n == 0:
+            await query.edit_message_text("📭 Уже ничего нет.")
+            return
+        delete_user_scheduled(target_chat_id)
+        await query.edit_message_text(f"✅ Удалено {n} викторин.")
+
+        if target_chat_id != str(user_id):
+            try:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                requests.post(url, data={
+                    "chat_id": target_chat_id,
+                    "text": f"⚠️ Админ удалил все твои запланированные викторины ({n} шт)."
+                })
+            except Exception as e:
+                print(f"⚠️ Не смог уведомить {target_chat_id}: {e}")
+        return
+
+    if data == "cancel_caq":
+        await query.edit_message_text("❌ Отменено.")
+        return
+
+    # --- Подтверждение массового удаления МЕМОВ ---
+    if data.startswith("confirm_cam_"):
+        target_chat_id = data.replace("confirm_cam_", "")
+        n = count_user_memes(target_chat_id)
+        if n == 0:
+            await query.edit_message_text("📭 Уже ничего нет.")
+            return
+        delete_user_memes(target_chat_id)
+        await query.edit_message_text(f"✅ Удалено {n} мемов.")
+
+        if target_chat_id != str(user_id):
+            try:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                requests.post(url, data={
+                    "chat_id": target_chat_id,
+                    "text": f"⚠️ Админ удалил все твои запланированные мемы ({n} шт)."
+                })
+            except Exception as e:
+                print(f"⚠️ Не смог уведомить {target_chat_id}: {e}")
+        return
+
+    if data == "cancel_cam":
+        await query.edit_message_text("❌ Отменено.")
         return
 
     # --- Редактирование викторины через кнопки ---
@@ -1780,7 +2019,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Мем #{meme_id} не найден.")
             return
 
-        # meme = (id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time)
         owner_chat_id = meme[1]
         context.user_data['edit_meme_id'] = meme_id
         context.user_data['edit_meme_chat_id'] = owner_chat_id
@@ -2087,7 +2325,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_meme_media(update, context)
         return
 
-    # --- Редактирование картинки викторины ---
     if step == 'waiting_for_edit_quiz_picture':
         if not update.message.photo:
             await update.message.reply_text("❌ Для викторины нужна именно картинка (фото).")
@@ -2104,7 +2341,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_quiz_edit_menu(update, context, quiz_id)
         return
 
-    # --- Редактирование медиа мема ---
     if step == 'waiting_for_edit_meme_picture':
         if not update.message.photo and not update.message.video:
             await update.message.reply_text("❌ Нужна картинка или видео.")
@@ -2186,6 +2422,7 @@ def main():
     app.add_handler(CommandHandler("mymemes", my_memes))
     app.add_handler(CommandHandler("cancel_all", cancel_all))
     app.add_handler(CommandHandler("cancelallmemes", cancel_all_memes))
+    app.add_handler(CommandHandler("cancelmeme_all", cancel_all_memes))
     app.add_handler(CommandHandler("cancel", cancel_quiz))
     app.add_handler(CommandHandler("cancelmeme", cancel_meme))
     app.add_handler(CommandHandler("id", get_id))
