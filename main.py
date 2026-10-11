@@ -14,21 +14,17 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 MSK = timezone(timedelta(hours=3))
 
 def now_utc():
-    """Текущее время в UTC (не зависит от хостинга)"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 def now_msk():
-    """Текущее время в МСК"""
     return datetime.now(timezone.utc).astimezone(MSK)
 
 def utc_to_msk(dt_utc):
-    """UTC (naive) → МСК (naive)"""
     if dt_utc is None:
         return None
     return dt_utc + timedelta(hours=3)
 
 def msk_to_utc(dt_msk):
-    """МСК (naive) → UTC (naive)"""
     if dt_msk is None:
         return None
     return dt_msk - timedelta(hours=3)
@@ -44,9 +40,7 @@ MEME_ADMIN_ID = "6607609864"
 
 # ============================================================
 # АДМИНЫ — полный доступ ко ВСЕМ командам бота.
-# Добавляй сюда ID своих админов строками через запятую.
-# Узнать ID: /id в этом боте (но сначала надо быть в списке),
-# или у @userinfobot в ТГ.
+# Добавляй сюда ID своих админов строками.
 # ============================================================
 ADMIN_IDS = [
     "5206039766",
@@ -62,16 +56,10 @@ HASHTAGS = [
 
 # --- ПРОВЕРКА ПРАВ ---
 def is_admin(user_id) -> bool:
-    """Является ли пользователь админом."""
     return str(user_id) in [str(x) for x in ADMIN_IDS]
 
 
 async def require_admin(update_or_query) -> bool:
-    """
-    Проверяет права. Работает и для Message, и для CallbackQuery.
-    Возвращает True если админ, иначе отвечает с отказом и возвращает False.
-    """
-    # CallbackQuery
     if hasattr(update_or_query, "callback_query") and update_or_query.callback_query:
         user = update_or_query.callback_query.from_user
         query = update_or_query.callback_query
@@ -83,7 +71,6 @@ async def require_admin(update_or_query) -> bool:
             return False
         return True
 
-    # Update с message
     user = update_or_query.effective_user
     if not is_admin(user.id):
         await update_or_query.message.reply_text(
@@ -161,7 +148,7 @@ def save_user(chat_id, username):
     conn.commit()
     conn.close()
 
-# --- ФУНКЦИИ ДЛЯ ВИКТОРИН ---
+# --- ВИКТОРИНЫ ---
 def save_scheduled(chat_id, username, question, options, correct_option_id, hashtag, file_id, publish_time_utc, explanation=None):
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
@@ -222,7 +209,6 @@ def get_user_scheduled_by_username(username):
     return rows
 
 def get_scheduled_by_id(quiz_id):
-    """Возвращает запись викторины по ID (без привязки к chat_id)."""
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
     c.execute('''
@@ -234,7 +220,6 @@ def get_scheduled_by_id(quiz_id):
     return row
 
 def get_full_scheduled(quiz_id):
-    """Возвращает полную запись викторины по ID (включая все поля)."""
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
     c.execute('''
@@ -269,10 +254,6 @@ def update_scheduled_time(chat_id, quiz_id, new_time_utc):
     return changed > 0
 
 def update_scheduled_field(chat_id, quiz_id, field, value):
-    """
-    Обновляет одно поле викторины.
-    field: 'question' | 'options' | 'correct_option_id' | 'hashtag' | 'explanation' | 'file_id'
-    """
     allowed = {'question', 'options', 'correct_option_id', 'hashtag', 'explanation', 'file_id'}
     if field not in allowed:
         return False
@@ -285,7 +266,7 @@ def update_scheduled_field(chat_id, quiz_id, field, value):
     conn.close()
     return changed > 0
 
-# --- ФУНКЦИИ ДЛЯ МЕМОВ ---
+# --- МЕМЫ ---
 def save_meme(chat_id, username, file_id, file_type, hashtag, post_text, publish_time_utc):
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
@@ -348,11 +329,22 @@ def get_user_memes_by_username(username):
     return rows
 
 def get_meme_by_id(meme_id):
-    """Возвращает запись мема по ID (без привязки к chat_id)."""
     conn = sqlite3.connect(QUIZZES_DB)
     c = conn.cursor()
     c.execute('''
         SELECT id, chat_id, username, file_type, hashtag, publish_time
+        FROM memes WHERE id = ?
+    ''', (meme_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def get_full_meme(meme_id):
+    """Полная запись мема: id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time."""
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time
         FROM memes WHERE id = ?
     ''', (meme_id,))
     row = c.fetchone()
@@ -381,14 +373,26 @@ def update_meme_time(chat_id, meme_id, new_time_utc):
     conn.close()
     return changed > 0
 
+def update_meme_field(chat_id, meme_id, field, value):
+    """
+    Обновляет одно поле мема.
+    field: 'hashtag' | 'post_text' | 'file_id'
+    """
+    allowed = {'hashtag', 'post_text', 'file_id'}
+    if field not in allowed:
+        return False
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute(f'UPDATE memes SET {field} = ? WHERE chat_id = ? AND id = ?',
+              (value, chat_id, meme_id))
+    changed = c.rowcount
+    conn.commit()
+    conn.close()
+    return changed > 0
+
 def find_user_chat_id(target):
-    """
-    Ищет chat_id пользователя по @username или по числовому chat_id.
-    Возвращает (chat_id, username) или (None, None).
-    """
     target = target.strip()
 
-    # По @username
     if target.startswith('@'):
         username = target[1:]
         conn = sqlite3.connect(QUIZZES_DB)
@@ -406,7 +410,6 @@ def find_user_chat_id(target):
             return row[0], row[1]
         return None, None
 
-    # По chat_id (число)
     if target.lstrip('-').isdigit():
         chat_id = target
         conn = sqlite3.connect(QUIZZES_DB)
@@ -428,7 +431,6 @@ def find_user_chat_id(target):
 
 # --- НАПОМИНАЛКА ---
 def get_today_memes_by_time_msk(chat_id, target_hour_msk, target_minute_msk):
-    """Проверяет, запланирован ли мем на конкретное МСК-время сегодня"""
     now_msk_dt = now_msk()
     target_msk = now_msk_dt.replace(hour=target_hour_msk, minute=target_minute_msk, second=0, microsecond=0)
     target_utc = msk_to_utc(target_msk.replace(tzinfo=None))
@@ -543,11 +545,10 @@ def reminder_loop():
 
         time.sleep(60)
 
-# --- ФОНОВЫЙ ПОТОК ---
+# --- ПЛАНИРОВЩИК ---
 def scheduler_loop():
     while True:
         try:
-            # --- ПРОВЕРКА ВИКТОРИН ---
             due = get_due_quizzes()
             for row in due:
                 quiz_id, chat_id, question, options, correct_option_id, hashtag, file_id, publish_time, explanation = row
@@ -588,7 +589,6 @@ def scheduler_loop():
                 except Exception as e:
                     print(f"❌ Ошибка публикации: {e}")
 
-            # --- ПРОВЕРКА МЕМОВ ---
             due_memes = get_due_memes()
             for row in due_memes:
                 meme_id, chat_id, file_id, file_type, hashtag, post_text, publish_time = row
@@ -628,22 +628,14 @@ def scheduler_loop():
 
 # --- ПАРСИНГИ ---
 def parse_datetime(text):
-    """
-    Парсит время от пользователя в МСК и возвращает UTC (naive).
-      - 20:33 (только время)
-      - 08.07 20:33
-      - 08.07.2026 20:33
-    """
     now_msk_dt = now_msk().replace(tzinfo=None)
 
-    # Дата + время с годом
     match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})', text)
     if match:
         day, month, year, hour, minute = map(int, match.groups())
         dt_msk = datetime(year, month, day, hour, minute)
         return msk_to_utc(dt_msk)
 
-    # Дата + время
     match = re.search(r'(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})', text)
     if match:
         day, month, hour, minute = map(int, match.groups())
@@ -655,7 +647,6 @@ def parse_datetime(text):
                 dt_msk = dt_msk.replace(year=now_msk_dt.year + 1)
         return msk_to_utc(dt_msk)
 
-    # Только время
     match = re.search(r'(\d{1,2}):(\d{2})', text)
     if match:
         hour, minute = int(match.group(1)), int(match.group(2))
@@ -667,14 +658,7 @@ def parse_datetime(text):
     return None
 
 def parse_quiz(text):
-    """
-    Парсит викторину. Формат:
-        Вопрос (А; Б*; В; Г)
-        Объяснение (необязательно, на той же или следующей строке)
-    Правильный ответ помечен *.
-    """
     text = text.strip()
-
     match = re.match(r'^(.*?)\s*\((.+?)\)\s*(.*)$', text, re.DOTALL)
     if not match:
         return None
@@ -739,7 +723,7 @@ def backup_quizzes():
         return backup_name
     return None
 
-# --- ОБРАБОТЧИКИ ВИКТОРИН ---
+# --- КОМАНДЫ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -834,7 +818,6 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     target = context.args[0]
 
-    # --- По username ---
     if target.startswith('@'):
         username = target[1:]
         scheduled = get_user_scheduled_by_username(username)
@@ -853,7 +836,6 @@ async def view_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    # --- По chat_id ---
     if target.isdigit():
         scheduled = get_user_scheduled_by_chat_id(target)
         if not scheduled:
@@ -883,7 +865,6 @@ async def view_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     target = context.args[0]
 
-    # --- По username ---
     if target.startswith('@'):
         username = target[1:]
         memes = get_user_memes_by_username(username)
@@ -902,7 +883,6 @@ async def view_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    # --- По chat_id ---
     if target.isdigit():
         memes = get_user_memes_by_chat_id(target)
         if not memes:
@@ -925,11 +905,6 @@ async def view_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- РЕДАКТИРОВАНИЕ ВИКТОРИН ---
 async def edit_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /editquiz <id>              — редактировать свою
-    /editquiz @username <id>    — редактировать чужую по юзернейму
-    /editquiz 123456789 <id>    — редактировать чужую по chat_id
-    """
     if not await require_admin(update):
         return
 
@@ -946,7 +921,6 @@ async def edit_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- Определяем, чья викторина ---
     if len(args) == 1:
         target_chat_id = chat_id
         try:
@@ -972,7 +946,6 @@ async def edit_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Слишком много аргументов.")
         return
 
-    # --- Ищем викторину ---
     quiz = get_full_scheduled(quiz_id)
     if not quiz:
         await update.message.reply_text(f"❌ Викторина #{quiz_id} не найдена в БД.")
@@ -993,16 +966,10 @@ async def edit_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- Показываем картинку + меню ---
     await show_quiz_edit_menu(update, context, quiz_id)
 
 
 async def show_quiz_edit_menu(update_or_query, context, quiz_id, edit=False):
-    """
-    Показывает картинку викторины + меню редактирования.
-    Если edit=True — редактируем предыдущее сообщение (для callback).
-    Если edit=False — шлём новое (для команды).
-    """
     quiz = get_full_scheduled(quiz_id)
     if not quiz:
         text = f"❌ Викторина #{quiz_id} не найдена."
@@ -1012,7 +979,6 @@ async def show_quiz_edit_menu(update_or_query, context, quiz_id, edit=False):
             await update_or_query.message.reply_text(text)
         return
 
-    # quiz = (id, chat_id, username, question, options, correct_option_id, hashtag, file_id, publish_time, explanation)
     options_list = quiz[4].split('|||') if quiz[4] else []
     correct_idx = quiz[5]
     correct_text = options_list[correct_idx] if 0 <= correct_idx < len(options_list) else "?"
@@ -1044,7 +1010,6 @@ async def show_quiz_edit_menu(update_or_query, context, quiz_id, edit=False):
     if edit:
         await update_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        # Сначала шлём картинку (если есть), потом текст с меню
         if quiz[7]:
             try:
                 await update_or_query.message.reply_photo(
@@ -1058,7 +1023,7 @@ async def show_quiz_edit_menu(update_or_query, context, quiz_id, edit=False):
 
 
 # --- РЕДАКТИРОВАНИЕ МЕМОВ ---
-async def edit_meme_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def edit_meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /editmeme <id>              — редактировать свой
     /editmeme @username <id>    — редактировать чужой по юзернейму
@@ -1105,7 +1070,7 @@ async def edit_meme_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Слишком много аргументов.")
         return
 
-    meme = get_meme_by_id(meme_id)
+    meme = get_full_meme(meme_id)
     if not meme:
         await update.message.reply_text(f"❌ Мем #{meme_id} не найден в БД.")
         return
@@ -1125,20 +1090,69 @@ async def edit_meme_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    context.user_data['edit_meme_id'] = meme_id
-    context.user_data['edit_meme_chat_id'] = real_chat_id
-    context.user_data['step'] = 'waiting_for_edit_meme_time'
+    await show_meme_edit_menu(update, context, meme_id)
 
-    owner_label = f"@{real_username}" if real_username else f"`{real_chat_id}`"
-    await update.message.reply_text(
-        f"✏️ Меняем время мема #{meme_id} ({owner_label})\n\n"
-        f"🏷️ {meme[4]}\n\n"
-        "📅 Напиши новое время (МСК):\n"
-        "`20:33` или `08.07 20:33` или `08.07.2026 20:33`"
+
+async def show_meme_edit_menu(update_or_query, context, meme_id, edit=False):
+    """
+    Показывает картинку/видео мема + меню редактирования.
+    """
+    meme = get_full_meme(meme_id)
+    if not meme:
+        text = f"❌ Мем #{meme_id} не найден."
+        if edit:
+            await update_or_query.edit_message_text(text)
+        else:
+            await update_or_query.message.reply_text(text)
+        return
+
+    # meme = (id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time)
+    file_id = meme[3]
+    file_type = meme[4]
+    hashtag = meme[5]
+    post_text = meme[6] or "—"
+    dt_msk = utc_to_msk(datetime.fromisoformat(meme[7]))
+
+    text = (
+        f"✏️ **Редактирование мема #{meme_id}**\n"
+        f"👤 Владелец: @{meme[2] or meme[1]}\n\n"
+        f"🖼️ **Тип:** {file_type}\n"
+        f"🏷️ **Хэштег:** {hashtag}\n"
+        f"📝 **Текст:** {post_text[:100] if post_text else '—'}\n"
+        f"📅 **Время:** {dt_msk.strftime('%d.%m.%Y %H:%M')} МСК\n\n"
+        f"Что редактируем?"
     )
 
+    keyboard = [
+        [InlineKeyboardButton("🖼️ Картинка/видео", callback_data=f"medit_picture_{meme_id}"),
+         InlineKeyboardButton("🏷️ Хэштег", callback_data=f"medit_hashtag_{meme_id}")],
+        [InlineKeyboardButton("📝 Текст", callback_data=f"medit_text_{meme_id}"),
+         InlineKeyboardButton("📅 Время", callback_data=f"medit_time_{meme_id}")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data=f"medit_close_{meme_id}")],
+    ]
 
-# --- ОБРАБОТЧИКИ МЕМОВ ---
+    if edit:
+        await update_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        # Сначала шлём медиа, потом текст
+        try:
+            if file_type == 'photo':
+                await update_or_query.message.reply_photo(
+                    photo=file_id,
+                    caption=f"🖼️ Текущая картинка мема #{meme_id}"
+                )
+            else:
+                await update_or_query.message.reply_video(
+                    video=file_id,
+                    caption=f"🎬 Текущее видео мема #{meme_id}"
+                )
+        except Exception as e:
+            print(f"⚠️ Не удалось отправить медиа: {e}")
+            await update_or_query.message.reply_text("⚠️ Не удалось показать текущее медиа.")
+        await update_or_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+# --- СОЗДАНИЕ МЕМОВ ---
 async def start_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
@@ -1334,11 +1348,10 @@ async def backup_base_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
-# --- ОСНОВНОЙ ОБРАБОТЧИК ---
+# --- ОСНОВНОЙ ОБРАБОТЧИК ТЕКСТА ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # ЖЁСТКАЯ проверка: не-админ вообще ничего не может делать через текст
     if not is_admin(user_id):
         return
 
@@ -1474,7 +1487,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_quiz_edit_menu(update, context, quiz_id)
         return
 
-    # --- Редактирование времени мема ---
+    # --- Редактирование полей мема ---
+    if step == 'waiting_for_edit_meme_hashtag':
+        meme_id = context.user_data.get('edit_meme_id')
+        owner_chat_id = context.user_data.get('edit_meme_chat_id')
+        new_hashtag = text.strip()
+        if not new_hashtag.startswith('#'):
+            new_hashtag = '#' + new_hashtag
+        ok = update_meme_field(owner_chat_id, meme_id, 'hashtag', new_hashtag)
+        if ok:
+            await update.message.reply_text(f"✅ Хэштег обновлён: {new_hashtag}")
+        else:
+            await update.message.reply_text("❌ Не удалось обновить.")
+        context.user_data.clear()
+        await show_meme_edit_menu(update, context, meme_id)
+        return
+
+    if step == 'waiting_for_edit_meme_text':
+        meme_id = context.user_data.get('edit_meme_id')
+        owner_chat_id = context.user_data.get('edit_meme_chat_id')
+        new_text = text.strip()
+        if new_text.lower() in ('-', 'нет', 'нет.', 'удалить', 'без текста'):
+            new_text = None
+        ok = update_meme_field(owner_chat_id, meme_id, 'post_text', new_text)
+        if ok:
+            await update.message.reply_text(f"✅ Текст обновлён: {new_text or '— (удалён)'}")
+        else:
+            await update.message.reply_text("❌ Не удалось обновить.")
+        context.user_data.clear()
+        await show_meme_edit_menu(update, context, meme_id)
+        return
+
     if step == 'waiting_for_edit_meme_time':
         dt_utc = parse_datetime(text)
         if dt_utc is None:
@@ -1494,8 +1537,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Не удалось обновить. Возможно, запись уже удалена.")
         context.user_data.clear()
+        await show_meme_edit_menu(update, context, meme_id)
         return
 
+    # --- Создание мема ---
     if step == 'waiting_for_meme_post_text':
         context.user_data['meme_post_text'] = text
         context.user_data['step'] = 'waiting_for_meme_action'
@@ -1531,6 +1576,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # --- Создание викторины ---
     if step == 'waiting_for_quiz_text':
         parsed = parse_quiz(text)
         if parsed and len(parsed['options']) >= 2:
@@ -1633,7 +1679,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     print(f"🔘 Нажата кнопка: {data} от user_id={user_id}")
 
-    # ЖЁСТКАЯ проверка: не-админ не может нажимать никакие кнопки
     if not is_admin(user_id):
         try:
             await query.edit_message_text("⛔ У тебя нет прав.")
@@ -1716,6 +1761,69 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dt_msk = utc_to_msk(datetime.fromisoformat(quiz[8]))
             await query.edit_message_text(
                 f"✏️ **Новое время** для #{quiz_id}:\n\n"
+                f"Текущее: {dt_msk.strftime('%d.%m.%Y %H:%M')} МСК\n\n"
+                "Напиши новое время (МСК):\n"
+                "`20:33` или `08.07 20:33`"
+            )
+            return
+
+        return
+
+    # --- Редактирование мема через кнопки ---
+    if data.startswith("medit_"):
+        parts = data.split("_")
+        field = parts[1]
+        meme_id = int(parts[2])
+
+        meme = get_full_meme(meme_id)
+        if not meme:
+            await query.edit_message_text(f"❌ Мем #{meme_id} не найден.")
+            return
+
+        # meme = (id, chat_id, username, file_id, file_type, hashtag, post_text, publish_time)
+        owner_chat_id = meme[1]
+        context.user_data['edit_meme_id'] = meme_id
+        context.user_data['edit_meme_chat_id'] = owner_chat_id
+
+        if field == "close":
+            await query.edit_message_text("✅ Редактирование закрыто.")
+            context.user_data.clear()
+            return
+
+        if field == "picture":
+            context.user_data['step'] = 'waiting_for_edit_meme_picture'
+            await query.edit_message_text(
+                f"🖼️ **Новое медиа** для мема #{meme_id}:\n\n"
+                "Отправь новую картинку или видео.\n"
+                "Тип заменится автоматически."
+            )
+            return
+
+        if field == "hashtag":
+            context.user_data['step'] = 'waiting_for_edit_meme_hashtag'
+            await query.edit_message_text(
+                f"✏️ **Новый хэштег** для мема #{meme_id}:\n\n"
+                f"Текущий: {meme[5]}\n\n"
+                "Напиши новый хэштег (можно без `#`):"
+            )
+            return
+
+        if field == "text":
+            context.user_data['step'] = 'waiting_for_edit_meme_text'
+            current = meme[6] or "—"
+            await query.edit_message_text(
+                f"✏️ **Новый текст** для мема #{meme_id}:\n\n"
+                f"Текущий: {current}\n\n"
+                "Напиши новый текст.\n"
+                "Или напиши `-` чтобы удалить текст."
+            )
+            return
+
+        if field == "time":
+            context.user_data['step'] = 'waiting_for_edit_meme_time'
+            dt_msk = utc_to_msk(datetime.fromisoformat(meme[7]))
+            await query.edit_message_text(
+                f"✏️ **Новое время** для мема #{meme_id}:\n\n"
                 f"Текущее: {dt_msk.strftime('%d.%m.%Y %H:%M')} МСК\n\n"
                 "Напиши новое время (МСК):\n"
                 "`20:33` или `08.07 20:33`"
@@ -1928,7 +2036,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text("❌ Неизвестная команда.")
 
-# --- КАРТИНКА ДЛЯ ВИКТОРИНЫ ---
+# --- КАРТИНКА ДЛЯ НОВОЙ ВИКТОРИНЫ ---
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('step') != 'waiting_for_image':
         return
@@ -1960,23 +2068,26 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # ЖЁСТКАЯ проверка: не-админ вообще ничего не может закинуть
     if not is_admin(user_id):
         return
 
     step = context.user_data.get('step')
+
     if step == 'waiting_for_image':
         if not update.message.photo:
             await update.message.reply_text("❌ Для викторины нужна именно картинка (фото).")
             return
         await handle_image(update, context)
         return
+
     if step == 'waiting_for_meme_media':
         if not update.message.photo and not update.message.video:
             await update.message.reply_text("❌ Для мема нужна картинка или видео.")
             return
         await handle_meme_media(update, context)
         return
+
+    # --- Редактирование картинки викторины ---
     if step == 'waiting_for_edit_quiz_picture':
         if not update.message.photo:
             await update.message.reply_text("❌ Для викторины нужна именно картинка (фото).")
@@ -1992,6 +2103,41 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await show_quiz_edit_menu(update, context, quiz_id)
         return
+
+    # --- Редактирование медиа мема ---
+    if step == 'waiting_for_edit_meme_picture':
+        if not update.message.photo and not update.message.video:
+            await update.message.reply_text("❌ Нужна картинка или видео.")
+            return
+
+        meme_id = context.user_data.get('edit_meme_id')
+        owner_chat_id = context.user_data.get('edit_meme_chat_id')
+
+        if update.message.photo:
+            new_file_id = update.message.photo[-1].file_id
+            new_file_type = 'photo'
+        else:
+            new_file_id = update.message.video.file_id
+            new_file_type = 'video'
+
+        conn = sqlite3.connect(QUIZZES_DB)
+        c = conn.cursor()
+        c.execute('''
+            UPDATE memes SET file_id = ?, file_type = ?
+            WHERE chat_id = ? AND id = ?
+        ''', (new_file_id, new_file_type, owner_chat_id, meme_id))
+        ok = c.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if ok:
+            await update.message.reply_text(f"✅ Медиа мема #{meme_id} обновлено ({new_file_type}).")
+        else:
+            await update.message.reply_text("❌ Не удалось обновить медиа.")
+        context.user_data.clear()
+        await show_meme_edit_menu(update, context, meme_id)
+        return
+
     await update.message.reply_text("❌ Я не жду медиа. Используй /quiz или /meme чтобы начать.")
 
 async def show_memes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2046,7 +2192,7 @@ def main():
     app.add_handler(CommandHandler("view", view_command))
     app.add_handler(CommandHandler("viewmeme", view_meme_command))
     app.add_handler(CommandHandler("editquiz", edit_quiz_command))
-    app.add_handler(CommandHandler("editmeme", edit_meme_time))
+    app.add_handler(CommandHandler("editmeme", edit_meme_command))
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("backupbase", backup_base_command))
     app.add_handler(CommandHandler("showmemes", show_memes))
