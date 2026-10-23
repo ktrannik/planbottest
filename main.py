@@ -479,6 +479,27 @@ def get_today_memes_by_time_msk(chat_id, target_hour_msk, target_minute_msk):
     conn.close()
     return rows
 
+def get_today_memes_any_time(chat_id):
+    """Проверяет, есть ли ХОТЬ ОДИН мем на сегодня (МСК-дата)."""
+    now_msk_dt = now_msk()
+    start_msk = now_msk_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_msk = start_msk + timedelta(days=1)
+
+    start_utc = msk_to_utc(start_msk.replace(tzinfo=None)).isoformat()
+    end_utc = msk_to_utc(end_msk.replace(tzinfo=None)).isoformat()
+
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id FROM memes
+        WHERE chat_id = ?
+        AND publish_time >= ?
+        AND publish_time < ?
+    ''', (chat_id, start_utc, end_utc))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def send_reminder(bot_token, chat_id, time_str):
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -545,27 +566,39 @@ def reminder_loop():
             now_msk_dt = now_msk()
             current_hour = now_msk_dt.hour
             current_minute = now_msk_dt.minute
+            current_total = current_hour * 60 + current_minute
 
-            print(f"🔄 Проверка (МСК): {current_hour:02d}:{current_minute:02d}")
-
-            reminder_times = [
-                {"hour": 17, "minute": 30, "start_remind": 17, "start_minute": 5},
-                {"hour": 18, "minute": 30, "start_remind": 18, "start_minute": 5},
-                {"hour": 19, "minute": 30, "start_remind": 19, "start_minute": 5},
+            # Расписание: (время публикации, время начала напоминаний)
+            # Напоминаем каждые 5 минут ОТ start до publish_time
+            reminder_slots = [
+                {"publish_hour": 17, "publish_minute": 45, "start_hour": 17, "start_minute": 5},
+                {"publish_hour": 18, "publish_minute": 45, "start_hour": 18, "start_minute": 5},
+                {"publish_hour": 19, "publish_minute": 45, "start_hour": 19, "start_minute": 5},
             ]
 
-            for rt in reminder_times:
-                if current_hour == rt["start_remind"] and rt["start_minute"] <= current_minute <= rt["start_minute"] + 20:
-                    existing = get_today_memes_by_time_msk(MEME_ADMIN_ID, rt["hour"], rt["minute"])
-                    print(f"📊 Найдено мемов в БД: {len(existing)}")
-                    if not existing:
-                        if current_minute % 5 == 0:
+            for slot in reminder_slots:
+                start_total = slot["start_hour"] * 60 + slot["start_minute"]
+                publish_total = slot["publish_hour"] * 60 + slot["publish_minute"]
+
+                # Мы в окне напоминаний?
+                if start_total <= current_total < publish_total:
+                    # Каждые 5 минут
+                    if current_minute % 5 == 0:
+                        # Проверяем: есть ли мем на ЭТО конкретное время?
+                        existing = get_today_memes_by_time_msk(
+                            MEME_ADMIN_ID,
+                            slot["publish_hour"],
+                            slot["publish_minute"]
+                        )
+                        if not existing:
                             send_reminder(
                                 BOT_TOKEN,
                                 MEME_ADMIN_ID,
-                                f"{rt['hour']:02d}:{rt['minute']:02d} МСК"
+                                f"{slot['publish_hour']:02d}:{slot['publish_minute']:02d} МСК"
                             )
-                            print(f"⏰ Напоминание отправлено на {rt['hour']:02d}:{rt['minute']:02d} МСК")
+                            print(f"⏰ Напоминание: нет мема на {slot['publish_hour']:02d}:{slot['publish_minute']:02d} (сейчас {current_hour:02d}:{current_minute:02d})")
+                        else:
+                            print(f"✅ Мем на {slot['publish_hour']:02d}:{slot['publish_minute']:02d} есть, молчим")
 
         except Exception as e:
             print(f"❌ Ошибка в напоминалке: {e}")
