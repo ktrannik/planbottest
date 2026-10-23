@@ -129,6 +129,16 @@ def init_db():
            last_seen TEXT
         )
     ''')
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS published_memes (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           chat_id TEXT,
+           meme_id INTEGER,
+           publish_time TEXT,
+           published_at TEXT
+        )
+    ''')
     try:
         c.execute('ALTER TABLE scheduled ADD COLUMN explanation TEXT')
     except sqlite3.OperationalError:
@@ -500,6 +510,47 @@ def get_today_memes_any_time(chat_id):
     conn.close()
     return rows
 
+def has_today_meme_activity(chat_id):
+    """
+    Проверяет: был ли на сегодня мем (запланирован ИЛИ уже опубликован).
+    Возвращает True если хоть что-то есть.
+    """
+    now_msk_dt = now_msk()
+    start_msk = now_msk_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_msk = start_msk + timedelta(days=1)
+    start_utc = msk_to_utc(start_msk.replace(tzinfo=None)).isoformat()
+    end_utc = msk_to_utc(end_msk.replace(tzinfo=None)).isoformat()
+
+    conn = sqlite3.connect(QUIZZES_DB)
+    c = conn.cursor()
+
+    # 1. Есть запланированный мем на сегодня?
+    c.execute('''
+        SELECT id FROM memes
+        WHERE chat_id = ?
+        AND publish_time >= ?
+        AND publish_time < ?
+        LIMIT 1
+    ''', (chat_id, start_utc, end_utc))
+    scheduled = c.fetchone()
+
+    if scheduled:
+        conn.close()
+        return True
+
+    # 2. Был опубликован мем на сегодня?
+    c.execute('''
+        SELECT id FROM published_memes
+        WHERE chat_id = ?
+        AND publish_time >= ?
+        AND publish_time < ?
+        LIMIT 1
+    ''', (chat_id, start_utc, end_utc))
+    published = c.fetchone()
+
+    conn.close()
+    return published is not None
+
 def send_reminder(bot_token, chat_id, time_str):
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -568,8 +619,13 @@ def reminder_loop():
             current_minute = now_msk_dt.minute
             current_total = current_hour * 60 + current_minute
 
-            # Расписание: (время публикации, время начала напоминаний)
-            # Напоминаем каждые 5 минут ОТ start до publish_time
+            # Если на сегодня есть ХОТЬ ЧТО-ТО (запланирован или опубликован) — молчим
+            if has_today_meme_activity(MEME_ADMIN_ID):
+                time.sleep(60)
+                continue
+
+            print(f"⚠️ На сегодня ({now_msk_dt.strftime('%d.%m')}) нет мемов (сейчас {current_hour:02d}:{current_minute:02d})")
+
             reminder_slots = [
                 {"publish_hour": 17, "publish_minute": 45, "start_hour": 17, "start_minute": 5},
                 {"publish_hour": 18, "publish_minute": 45, "start_hour": 18, "start_minute": 5},
@@ -580,25 +636,14 @@ def reminder_loop():
                 start_total = slot["start_hour"] * 60 + slot["start_minute"]
                 publish_total = slot["publish_hour"] * 60 + slot["publish_minute"]
 
-                # Мы в окне напоминаний?
                 if start_total <= current_total < publish_total:
-                    # Каждые 5 минут
                     if current_minute % 5 == 0:
-                        # Проверяем: есть ли мем на ЭТО конкретное время?
-                        existing = get_today_memes_by_time_msk(
+                        send_reminder(
+                            BOT_TOKEN,
                             MEME_ADMIN_ID,
-                            slot["publish_hour"],
-                            slot["publish_minute"]
+                            f"{slot['publish_hour']:02d}:{slot['publish_minute']:02d} МСК"
                         )
-                        if not existing:
-                            send_reminder(
-                                BOT_TOKEN,
-                                MEME_ADMIN_ID,
-                                f"{slot['publish_hour']:02d}:{slot['publish_minute']:02d} МСК"
-                            )
-                            print(f"⏰ Напоминание: нет мема на {slot['publish_hour']:02d}:{slot['publish_minute']:02d} (сейчас {current_hour:02d}:{current_minute:02d})")
-                        else:
-                            print(f"✅ Мем на {slot['publish_hour']:02d}:{slot['publish_minute']:02d} есть, молчим")
+                        print(f"⏰ Напоминание: нет мема (слот {slot['publish_hour']:02d}:{slot['publish_minute']:02d})")
 
         except Exception as e:
             print(f"❌ Ошибка в напоминалке: {e}")
@@ -676,6 +721,15 @@ def scheduler_loop():
                         })
 
                     print(f"✅ Мем опубликован: {hashtag}")
+                    # Сохраняем в лог ПЕРЕД удалением
+                    conn = sqlite3.connect(QUIZZES_DB)
+                    c2 = conn.cursor()
+                    c2.execute('''
+                        INSERT INTO published_memes (chat_id, meme_id, publish_time, published_at)
+                        VALUES (?, ?, ?, ?)
+                    ''', (chat_id, meme_id, publish_time, now_utc().isoformat()))
+                    conn.commit()
+                    conn.close()
                     delete_meme(meme_id)
 
                 except Exception as e:
