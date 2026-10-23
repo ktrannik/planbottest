@@ -627,9 +627,9 @@ def reminder_loop():
             print(f"⚠️ На сегодня ({now_msk_dt.strftime('%d.%m')}) нет мемов (сейчас {current_hour:02d}:{current_minute:02d})")
 
             reminder_slots = [
-                {"publish_hour": 17, "publish_minute": 45, "start_hour": 17, "start_minute": 5},
-                {"publish_hour": 18, "publish_minute": 45, "start_hour": 18, "start_minute": 5},
-                {"publish_hour": 19, "publish_minute": 45, "start_hour": 19, "start_minute": 5},
+                {"publish_hour": 17, "publish_minute": 45, "start_hour": 17, "start_minute": 15},
+                {"publish_hour": 18, "publish_minute": 45, "start_hour": 18, "start_minute": 15},
+                {"publish_hour": 19, "publish_minute": 45, "start_hour": 19, "start_minute": 15},
             ]
 
             for slot in reminder_slots:
